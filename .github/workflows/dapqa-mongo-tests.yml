@@ -1,4 +1,4 @@
-name: Docker tests
+name: dapqa mongo tests
 
 on:
   workflow_dispatch:
