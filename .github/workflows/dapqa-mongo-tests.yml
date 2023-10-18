@@ -1,0 +1,14 @@
+name: Docker tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  parallel:
+    uses: ./.github/workflows/dockertests.yml
+    with:
+      command-json-array: >
+        [
+        "make MONGO_VERSION=\"6.0.3\" MONGO_MAJOR=\"6.0\" MONGO_REPO=\"repo.mongodb.org\" MONGO_PACKAGE=\"mongodb-org\" mongo_features",
+        "make MONGO_VERSION=\"7.0.1\" MONGO_MAJOR=\"7.0\" MONGO_REPO=\"repo.mongodb.org\" MONGO_PACKAGE=\"mongodb-org\" mongo_features",
+        ]
