@@ -77,7 +77,7 @@ Feature: MongoDB binary backups with PITR
     Given mongodb02 has no data
     And mongodb initialized on mongodb02
 
-    When we restore binary mongo-backup #1 backup to mongodb02
+    When we restore binary mongo-backup #1 to mongodb02
     And we restore from #1 backup to "after fourth load" timestamp to mongodb02
     And we save mongodb02 data "restore to after fourth load from second backup"
     Then we have same data in "after fourth load" and "restore to after fourth load from second backup"
