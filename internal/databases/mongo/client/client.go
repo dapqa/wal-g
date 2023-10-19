@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/mongodb/mongo-tools-common/db"
@@ -306,8 +307,16 @@ func (mc *MongoClient) getApplyOpsCmd() bson.D {
 	return mc.applyOpsCmd
 }
 
-// ApplyOp calls applyOps and check response
-func (mc *MongoClient) ApplyOp(ctx context.Context, dbop db.Oplog) error {
+func (mc *MongoClient) getDatabaseAndCommand(dbop db.Oplog) (string, bson.D) {
+	if len(dbop.Object) > 0 && dbop.Object[0].Key == "dropIndexes" {
+		dbName := dbop.Namespace
+		if dotIdx := strings.IndexByte(dbop.Namespace, '.'); dotIdx != -1 {
+			dbName = dbName[:dotIdx]
+		}
+
+		return dbName, dbop.Object
+	}
+
 	// mongod complains if 'ts' or 'history' are passed to applyOps
 	op := ApplyOplog{
 		Operation:  dbop.Operation,
@@ -323,10 +332,19 @@ func (mc *MongoClient) ApplyOp(ctx context.Context, dbop db.Oplog) error {
 	// TODO: fix ugly interface after switch to passing pointers
 	cmd := mc.getApplyOpsCmd()
 	cmd[0] = bson.E{Key: "applyOps", Value: []interface{}{op}}
-	apply := mc.c.Database("admin").RunCommand(ctx, cmd)
+
+	return "admin", cmd
+}
+
+// ApplyOp calls applyOps and check response
+func (mc *MongoClient) ApplyOp(ctx context.Context, dbop db.Oplog) error {
+	dbName, cmd := mc.getDatabaseAndCommand(dbop)
+
+	apply := mc.c.Database(dbName).RunCommand(ctx, cmd)
 	if err := apply.Err(); err != nil {
 		return err
 	}
+
 	resp := CmdResponse{}
 	if err := apply.Decode(&resp); err != nil {
 		return fmt.Errorf("can not unmarshall command execution response: %+v\ncommand was:%+v", err, cmd)
