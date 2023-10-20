@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -124,7 +125,7 @@ func (m *MongoOplogCursor) Next(ctx context.Context) bool {
 	return m.Cursor.Next(ctx)
 }
 
-// ApplyOplog is used to replay oplog entry.
+// ApplyOplog is used to replay oplog entry via applyOps.
 type ApplyOplog struct {
 	Operation  string            `bson:"op"`
 	Namespace  string            `bson:"ns"`
@@ -134,6 +135,13 @@ type ApplyOplog struct {
 	LSID       bson.Raw          `bson:"lsid,omitempty"`
 	TxnNumber  *int64            `bson:"txnNumber,omitempty"`
 	PrevOpTime bson.Raw          `bson:"prevOpTime,omitempty"`
+}
+
+// replayCommand is a descriptor for the command used to replay oplog entry
+type replayCommand struct {
+	dbName        string
+	command       bson.D
+	isDropIndexes bool
 }
 
 // MongoClient implements MongoDriver
@@ -307,14 +315,18 @@ func (mc *MongoClient) getApplyOpsCmd() bson.D {
 	return mc.applyOpsCmd
 }
 
-func (mc *MongoClient) getDatabaseAndCommand(dbop db.Oplog) (string, bson.D) {
+func (mc *MongoClient) getReplayCommand(dbop db.Oplog) replayCommand {
 	if len(dbop.Object) > 0 && dbop.Object[0].Key == "dropIndexes" {
 		dbName := dbop.Namespace
 		if dotIdx := strings.IndexByte(dbop.Namespace, '.'); dotIdx != -1 {
 			dbName = dbName[:dotIdx]
 		}
 
-		return dbName, dbop.Object
+		return replayCommand{
+			dbName:        dbName,
+			command:       dbop.Object,
+			isDropIndexes: true,
+		}
 	}
 
 	// mongod complains if 'ts' or 'history' are passed to applyOps
@@ -333,15 +345,28 @@ func (mc *MongoClient) getDatabaseAndCommand(dbop db.Oplog) (string, bson.D) {
 	cmd := mc.getApplyOpsCmd()
 	cmd[0] = bson.E{Key: "applyOps", Value: []interface{}{op}}
 
-	return "admin", cmd
+	return replayCommand{
+		dbName:  "admin",
+		command: cmd,
+	}
 }
 
 // ApplyOp calls applyOps and check response
 func (mc *MongoClient) ApplyOp(ctx context.Context, dbop db.Oplog) error {
-	dbName, cmd := mc.getDatabaseAndCommand(dbop)
+	cmd := mc.getReplayCommand(dbop)
 
-	apply := mc.c.Database(dbName).RunCommand(ctx, cmd)
+	apply := mc.c.Database(cmd.dbName).RunCommand(ctx, cmd.command)
 	if err := apply.Err(); err != nil {
+		var mongoErr mongo.CommandError
+		isMongoErr := errors.As(err, &mongoErr)
+
+		if isMongoErr && cmd.isDropIndexes {
+			if mongoErr.Name == "BackgroundOperationInProgressForNamespace" {
+				tracelog.WarningLogger.Printf("Unable to drop index, skipped. Error is: %+v\n", err)
+				return nil
+			}
+		}
+
 		return err
 	}
 
